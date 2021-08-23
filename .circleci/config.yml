@@ -24,7 +24,7 @@ aliases:
     at: build
 
 # The CircleCI API doesn't yet support triggering a specific workflow, but it
-# does support triggering a pipeline. So as a workaround you can trigger the
+# does support triggering a pipeline. So as a workaround you can triggger the
 # entire pipeline and use parameters to disable everything except the workflow
 # you want. CircleCI recommends this workaround here:
 # https://support.circleci.com/hc/en-us/articles/360050351292-How-to-trigger-a-workflow-via-CircleCI-API-v2-
@@ -171,9 +171,9 @@ jobs:
       - run:
           name: Download artifacts for base revision
           command: |
-              git fetch origin main
+              git fetch origin master
               cd ./scripts/release && yarn && cd ../../
-              scripts/release/download-experimental-build.js --commit=$(git merge-base HEAD origin/main)
+              scripts/release/download-experimental-build.js --commit=$(git merge-base HEAD origin/master)
               mv ./build2 ./base-build
       - persist_to_workspace:
           root: .
@@ -227,6 +227,48 @@ jobs:
       - store_artifacts:
           path: ./build/devtools.tgz
 
+  build_devtools_scheduling_profiler:
+    docker: *docker
+    environment: *environment
+    steps:
+      - checkout
+      - attach_workspace: *attach_workspace
+      - run: yarn workspaces info | head -n -1 > workspace_info.txt
+      - *restore_yarn_cache
+      - *restore_node_modules
+      - run:
+          name: Install Packages
+          command: yarn --frozen-lockfile --cache-folder ~/.cache/yarn
+      - run:
+          name: Build and archive
+          command: |
+            mkdir -p build/devtools
+            cd packages/react-devtools-scheduling-profiler
+            yarn build
+            cd dist
+            tar -zcvf ../../../build/devtools-scheduling-profiler.tgz .
+      - store_artifacts:
+          path: ./build/devtools-scheduling-profiler.tgz
+      - persist_to_workspace:
+          root: packages/react-devtools-scheduling-profiler
+          paths:
+            - dist
+
+  deploy_devtools_scheduling_profiler:
+    docker: *docker
+    environment: *environment
+    steps:
+      - checkout
+      - attach_workspace:
+          at: packages/react-devtools-scheduling-profiler
+      - run: yarn workspaces info | head -n -1 > workspace_info.txt
+      - *restore_node_modules
+      - run:
+          name: Deploy
+          command: |
+            cd packages/react-devtools-scheduling-profiler
+            yarn vercel deploy dist --prod --confirm --token $SCHEDULING_PROFILER_DEPLOY_VERCEL_TOKEN
+
   yarn_lint_build:
     docker: *docker
     environment: *environment
@@ -236,6 +278,20 @@ jobs:
       - run: yarn workspaces info | head -n -1 > workspace_info.txt
       - *restore_node_modules
       - run: yarn lint-build
+      - run: scripts/circleci/check_minified_errors.sh
+
+  RELEASE_CHANNEL_stable_yarn_lint_build:
+    docker: *docker
+    environment: *environment
+    steps:
+      - checkout
+      - attach_workspace: *attach_workspace
+      - run: yarn workspaces info | head -n -1 > workspace_info.txt
+      - *restore_node_modules
+      - run:
+          environment:
+            RELEASE_CHANNEL: stable
+          command: yarn lint-build
       - run: scripts/circleci/check_minified_errors.sh
 
   yarn_test:
@@ -251,6 +307,22 @@ jobs:
       - *restore_node_modules
       - run: yarn test <<parameters.args>> --ci
 
+  yarn_test_build_devtools:
+    docker: *docker
+    environment: *environment
+    parallelism: *TEST_PARALLELISM
+    parameters:
+      args:
+        type: string
+      react-version:
+        type: string
+    steps:
+      - checkout
+      - run: yarn workspaces info | head -n -1 > workspace_info.txt
+      - *restore_node_modules
+      - run: git checkout v<<parameters.react-version>>
+      - run: yarn test-build-devtools <<parameters.args>> --ci
+
   yarn_test_build:
     docker: *docker
     environment: *environment
@@ -264,9 +336,6 @@ jobs:
           at: .
       - run: yarn workspaces info | head -n -1 > workspace_info.txt
       - *restore_node_modules
-      - run:
-          name: Install nested packages from Yarn cache
-          command: yarn --frozen-lockfile --cache-folder ~/.cache/yarn
       - run: yarn test --build <<parameters.args>> --ci
 
   RELEASE_CHANNEL_stable_yarn_test_dom_fixtures:
@@ -317,7 +386,7 @@ jobs:
       - run:
           name: Run publish script
           command: |
-            git fetch origin main
+            git fetch origin master
             cd ./scripts/release && yarn && cd ../../
             scripts/release/prepare-release-from-ci.js --skipTests -r << parameters.release_channel >> --commit=<< parameters.commit_sha >>
             cp ./scripts/release/ci-npmrc ~/.npmrc
@@ -352,6 +421,9 @@ workflows:
       - RELEASE_CHANNEL_stable_yarn_build:
           requires:
             - setup
+      - RELEASE_CHANNEL_stable_yarn_lint_build:
+          requires:
+            - RELEASE_CHANNEL_stable_yarn_build
       - RELEASE_CHANNEL_stable_yarn_test_dom_fixtures:
           requires:
             - RELEASE_CHANNEL_stable_yarn_build
@@ -363,9 +435,22 @@ workflows:
       - yarn_build:
           requires:
             - setup
+      - yarn_lint_build:
+          requires:
+            - yarn_build
       - build_devtools_and_process_artifacts:
           requires:
             - yarn_build
+      - build_devtools_scheduling_profiler:
+          requires:
+            - yarn_build
+      - deploy_devtools_scheduling_profiler:
+          requires:
+            - build_devtools_scheduling_profiler
+          filters:
+            branches:
+              only:
+                - master
 
   # New workflow that will replace "stable" and "experimental"
   build_and_test:
@@ -393,41 +478,23 @@ workflows:
                 - "-r=stable --env=production"
                 - "-r=experimental --env=development"
                 - "-r=experimental --env=production"
-                - "-r=www-classic --env=development --variant=false"
-                - "-r=www-classic --env=production --variant=false"
-                - "-r=www-classic --env=development --variant=true"
-                - "-r=www-classic --env=production --variant=true"
-                - "-r=www-modern --env=development --variant=false"
-                - "-r=www-modern --env=production --variant=false"
-                - "-r=www-modern --env=development --variant=true"
-                - "-r=www-modern --env=production --variant=true"
+                - "-r=www-classic --env=development"
+                - "-r=www-classic --env=production"
+                - "-r=www-classic --env=development --variant"
+                - "-r=www-classic --env=production --variant"
+                - "-r=www-modern --env=development"
+                - "-r=www-modern --env=production"
+                - "-r=www-modern --env=development --variant"
+                - "-r=www-modern --env=production --variant"
 
                 # TODO: Test more persistent configurations?
                 - '-r=stable --env=development --persistent'
-                - '-r=experimental --env=development --persistent'
       - yarn_build_combined:
           requires:
             - setup
       - process_artifacts_combined:
           requires:
             - yarn_build_combined
-      - yarn_test_build_devtools:
-          docker: *docker
-          environment: *environment
-          parallelism: *TEST_PARALLELISM
-          parameters:
-            args:
-              type: string
-            react-version:
-              type: string
-          steps:
-            - checkout
-            - run: yarn workspaces info | head -n -1 > workspace_info.txt
-            - *restore_node_modules
-            - run: git checkout v<<parameters.react-version>>
-            - run: yarn test-build-devtools <<parameters.args>> --ci
-
-
       - yarn_test_build:
           requires:
             - yarn_build_combined
@@ -446,22 +513,24 @@ workflows:
                 - "--project=devtools -r=experimental"
 
                 # TODO: Update test config to support www build tests
-                # - "-r=www-classic --env=development --variant=false"
-                # - "-r=www-classic --env=production --variant=false"
-                # - "-r=www-classic --env=development --variant=true"
-                # - "-r=www-classic --env=production --variant=true"
-                # - "-r=www-modern --env=development --variant=false"
-                # - "-r=www-modern --env=production --variant=false"
-                # - "-r=www-modern --env=development --variant=true"
-                # - "-r=www-modern --env=production --variant=true"
+                # - "-r=www-classic --env=development"
+                # - "-r=www-classic --env=production"
+                # - "-r=www-classic --env=development --variant"
+                # - "-r=www-classic --env=production --variant"
+                # - "-r=www-modern --env=development"
+                # - "-r=www-modern --env=production"
+                # - "-r=www-modern --env=development --variant"
+                # - "-r=www-modern --env=production --variant"
 
                 # TODO: Test more persistent configurations?
       - yarn_test_build_devtools:
-        matrix:
-          paramters:
-            args:
+          requires:
+            - yarn_build_combined
+          matrix:
+            parameters:
+              args:
                 - "--project=devtools -r=experimental"
-            react-version:
+              react-version:
                 - '15.0.0'
                 - '15.0.1'
                 - '15.0.2'
@@ -518,19 +587,16 @@ workflows:
           filters:
             branches:
               ignore:
-                - main
+                - master
           requires:
             - setup
       - sizebot:
           filters:
             branches:
               ignore:
-                - main
+                - master
           requires:
             - get_base_build
-            - yarn_build_combined
-      - yarn_lint_build:
-          requires:
             - yarn_build_combined
   fuzz_tests:
     unless: << pipeline.parameters.prerelease_commit_sha >>
@@ -541,7 +607,7 @@ workflows:
           filters:
             branches:
               only:
-                - main
+                - master
     jobs:
       - setup
       - test_fuzz:
@@ -559,7 +625,7 @@ workflows:
             - setup
           commit_sha: << pipeline.parameters.prerelease_commit_sha >>
           release_channel: stable
-          dist_tag: "next,alpha"
+          dist_tag: next
       - publish_prerelease:
           name: Publish to Experimental channel
           requires:
@@ -582,7 +648,7 @@ workflows:
           filters:
             branches:
               only:
-                - main
+                - master
     jobs:
       - setup
       - publish_prerelease:
@@ -591,7 +657,7 @@ workflows:
             - setup
           commit_sha: << pipeline.git.revision >>
           release_channel: stable
-          dist_tag: "next,alpha"
+          dist_tag: next
       - publish_prerelease:
           name: Publish to Experimental channel
           requires:
