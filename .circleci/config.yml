@@ -18,7 +18,7 @@ aliases:
       keys:
         - v2-node-{{ arch }}-{{ .Branch }}-{{ checksum "yarn.lock" }}-{{ checksum "workspace_info.txt" }}-node-modules
 
-  - &TEST_PARALLELISM 20
+  - &TEST_PARALLELISM 4 #20
 
   - &attach_workspace
     at: build
@@ -83,7 +83,7 @@ jobs:
   yarn_flow:
     docker: *docker
     environment: *environment
-    parallelism: 5
+    parallelism: 4 #5
 
     steps:
       - checkout
@@ -122,7 +122,7 @@ jobs:
   yarn_build:
     docker: *docker
     environment: *environment
-    parallelism: 20
+    parallelism: 4 #20
     steps:
       - checkout
       - run: yarn workspaces info | head -n -1 > workspace_info.txt
@@ -150,7 +150,7 @@ jobs:
   yarn_build_combined:
     docker: *docker
     environment: *environment
-    parallelism: 40
+    parallelism: 4 #40
     steps:
       - checkout
       - run: yarn workspaces info | head -n -1 > workspace_info.txt
@@ -171,9 +171,9 @@ jobs:
       - run:
           name: Download artifacts for base revision
           command: |
-              git fetch origin master
+              git fetch origin main
               cd ./scripts/release && yarn && cd ../../
-              scripts/release/download-experimental-build.js --commit=$(git merge-base HEAD origin/master)
+              scripts/release/download-experimental-build.js --commit=$(git merge-base HEAD origin/main)
               mv ./build2 ./base-build
       - persist_to_workspace:
           root: .
@@ -320,8 +320,9 @@ jobs:
       - checkout
       - run: yarn workspaces info | head -n -1 > workspace_info.txt
       - *restore_node_modules
+      # - working_directory: ~/react
       - run: git checkout v<<parameters.react-version>>
-      - run: yarn test-build-devtools <<parameters.args>> --ci
+      - run: yarn test --build --project devtools <<parameters.args>> --ci # yarn test-build-devtools
 
   yarn_test_build:
     docker: *docker
@@ -386,7 +387,7 @@ jobs:
       - run:
           name: Run publish script
           command: |
-            git fetch origin master
+            git fetch origin main
             cd ./scripts/release && yarn && cd ../../
             scripts/release/prepare-release-from-ci.js --skipTests -r << parameters.release_channel >> --commit=<< parameters.commit_sha >>
             cp ./scripts/release/ci-npmrc ~/.npmrc
@@ -411,46 +412,46 @@ jobs:
 
 workflows:
   version: 2
-  stable:
-    unless: << pipeline.parameters.prerelease_commit_sha >>
-    jobs:
-      - setup
-      - yarn_lint:
-          requires:
-            - setup
-      - RELEASE_CHANNEL_stable_yarn_build:
-          requires:
-            - setup
-      - RELEASE_CHANNEL_stable_yarn_lint_build:
-          requires:
-            - RELEASE_CHANNEL_stable_yarn_build
-      - RELEASE_CHANNEL_stable_yarn_test_dom_fixtures:
-          requires:
-            - RELEASE_CHANNEL_stable_yarn_build
+  # stable:
+  #   unless: << pipeline.parameters.prerelease_commit_sha >>
+  #   jobs:
+  #     - setup
+  #     - yarn_lint:
+  #         requires:
+  #           - setup
+  #     - RELEASE_CHANNEL_stable_yarn_build:
+  #         requires:
+  #           - setup
+  #     - RELEASE_CHANNEL_stable_yarn_lint_build:
+  #         requires:
+  #           - RELEASE_CHANNEL_stable_yarn_build
+  #     - RELEASE_CHANNEL_stable_yarn_test_dom_fixtures:
+  #         requires:
+  #           - RELEASE_CHANNEL_stable_yarn_build
 
-  experimental:
-    unless: << pipeline.parameters.prerelease_commit_sha >>
-    jobs:
-      - setup
-      - yarn_build:
-          requires:
-            - setup
-      - yarn_lint_build:
-          requires:
-            - yarn_build
-      - build_devtools_and_process_artifacts:
-          requires:
-            - yarn_build
-      - build_devtools_scheduling_profiler:
-          requires:
-            - yarn_build
-      - deploy_devtools_scheduling_profiler:
-          requires:
-            - build_devtools_scheduling_profiler
-          filters:
-            branches:
-              only:
-                - master
+  # experimental:
+  #   unless: << pipeline.parameters.prerelease_commit_sha >>
+  #   jobs:
+  #     - setup
+  #     - yarn_build:
+  #         requires:
+  #           - setup
+  #     - yarn_lint_build:
+  #         requires:
+  #           - yarn_build
+  #     - build_devtools_and_process_artifacts:
+  #         requires:
+  #           - yarn_build
+  #     - build_devtools_scheduling_profiler:
+  #         requires:
+  #           - yarn_build
+  #     - deploy_devtools_scheduling_profiler:
+  #         requires:
+  #           - build_devtools_scheduling_profiler
+  #         filters:
+  #           branches:
+  #             only:
+  #               - main
 
   # New workflow that will replace "stable" and "experimental"
   build_and_test:
@@ -462,9 +463,9 @@ workflows:
             - setup
       # NOTE: This job is only enabled when we want the forks to be in sync.
       # When the forks intentionally diverge, comment out the job to disable it.
-      - sync_reconciler_forks:
-          requires:
-            - setup
+      # - sync_reconciler_forks:
+      #     requires:
+      #       - setup
       - yarn_test:
           requires:
             - setup
@@ -530,6 +531,8 @@ workflows:
             parameters:
               args:
                 - "--project=devtools -r=experimental"
+                - "--project=devtools -r=stable"
+                # - "--project=devtools -r=stable --env=production"
               react-version:
                 - '15.0.0'
                 - '15.0.1'
@@ -587,14 +590,14 @@ workflows:
           filters:
             branches:
               ignore:
-                - master
+                - main
           requires:
             - setup
       - sizebot:
           filters:
             branches:
               ignore:
-                - master
+                - main
           requires:
             - get_base_build
             - yarn_build_combined
@@ -607,7 +610,7 @@ workflows:
           filters:
             branches:
               only:
-                - master
+                - main
     jobs:
       - setup
       - test_fuzz:
@@ -648,7 +651,7 @@ workflows:
           filters:
             branches:
               only:
-                - master
+                - main
     jobs:
       - setup
       - publish_prerelease:
